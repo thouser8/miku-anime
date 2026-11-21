@@ -47,6 +47,7 @@ import me.him188.ani.app.ui.lang.tv_settings_feedback_title_entry
 import me.him188.ani.app.ui.lang.tv_settings_feedback_title_entry_id
 import me.him188.ani.app.ui.lang.tv_settings_feedback_title_logo
 import me.him188.ani.app.ui.lang.tv_settings_feedback_title_logo_id
+import me.him188.ani.app.ui.lang.tv_settings_feedback_touch_description
 import me.him188.ani.app.ui.lang.tv_settings_feedback_unread_count
 import org.jetbrains.compose.resources.StringResource
 import kotlin.time.Instant
@@ -75,9 +76,19 @@ const val TV_SETTINGS_FEEDBACK_GROUP = "feedback"
  */
 internal fun TvSettingsItemsBuilder.feedbackItems() {
     val records = TvFeedbackRecordsKey
+    val platform = TvSettingKeys.platform
+    // 应用里就能写反馈的端 (触屏): 点了直接开反馈弹窗 (列表、会话、写反馈都在里面), 不进下一层、不画控制台的码
+    run(
+        Lang.tv_settings_feedback, Lang.tv_settings_feedback_touch_description,
+        keys = listOf(records, platform),
+        value = { v -> v[records]?.records?.let(::feedbackGroupValue) },
+        chevron = true,
+        visible = { it[platform]?.openFeedback != null },
+    ) { env -> env.deps.platform.openFeedback?.invoke() }
     group(
         Lang.tv_settings_feedback, Lang.tv_settings_feedback_description,
         value = { v -> v[records]?.records?.let(::feedbackGroupValue) },
+        visible = { it[platform]?.openFeedback == null },
         qr = { consoleQr(it, "#settings/feedback") },
         onOpen = { markAllRead() },
         anchor = TV_SETTINGS_FEEDBACK_GROUP,

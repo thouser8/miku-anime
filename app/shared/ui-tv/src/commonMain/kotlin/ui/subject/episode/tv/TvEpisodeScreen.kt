@@ -289,7 +289,7 @@ fun TvEpisodeScreenContent(
     // 平板模式的系统小窗 (见 TabletPictureInPicture)
     val pictureInPicture = if (tablet != null) rememberTabletPictureInPicture(vm) else null
     // 平板模式全屏时锁横屏 (竖着拿点全屏也转成横的, 见 TabletLandscapeLock); 小窗里不锁
-    if (tablet != null) TabletLandscapeLock(tablet.fullScreen && pictureInPicture?.isActive != true)
+    if (tablet != null) TabletLandscapeLock(tablet.fullScreen && pictureInPicture?.occupiesWindow != true)
     val seekFlash = remember { TvSeekFlashState() }
     val sheetsController = rememberVideoSideSheetsController<EpisodeVideoSideSheetPage>()
     val anySheetVisible by sheetsController.hasPageAsState()
@@ -2015,7 +2015,7 @@ fun TvEpisodeScreenContent(
             } else {
                 TabletPlayerFrame(
                     tablet,
-                    pictureInPicture = pictureInPicture?.isActive == true,
+                    pictureInPicture = pictureInPicture?.occupiesWindow == true,
                     pageTheme = pageTheme,
                     backdropUrl = rememberTabletBackdropUrl(vm.subjectId, page.subjectPresentation.info),
                     player = { playerRoot(Modifier) },
