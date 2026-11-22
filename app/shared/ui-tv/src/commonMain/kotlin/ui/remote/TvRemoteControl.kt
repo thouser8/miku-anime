@@ -815,9 +815,9 @@ object TvRemoteControl {
         }
         fun create(port: Int) = LanHttpServer(
             ::handle, port = port, token = token,
-            // 放宽请求体上限的只有上传安装包的分块、导入设置备份与反馈的照片三处
+            // 放宽请求体上限的只有上传安装包的分块与导入设置备份两处
             maxBodyBytes = { path ->
-                RemoteSettingsBackup.maxBodyBytes(path) ?: RemoteFeedback.maxBodyBytes(path) ?: RemoteAppUpdate.maxBodyBytes(path)
+                RemoteSettingsBackup.maxBodyBytes(path) ?: RemoteAppUpdate.maxBodyBytes(path)
             },
             // 手机授权完经 Worker 跳回来的那一跳带不了 token, 见 RemoteAccount.relayReturn
             publicHandlers = mapOf(BangumiOAuthRelay.RETURN_PATH to RemoteAccount::relayReturn),
@@ -976,10 +976,6 @@ object TvRemoteControl {
             path == "api/sources" || path.startsWith("api/sources/") ->
                 RemoteSources.handle(request)?.let(::json) ?: LanHttpResponse.status(405, "Method Not Allowed")
             // 「设置」标签底部的日志 (列表 / 下载), 见 RemoteLogs
-            // 「设置 → 反馈」: 提交过的反馈与工单, 见 RemoteFeedback
-            path == "api/feedback" || path.startsWith("api/feedback/") ->
-                RemoteFeedback.handleFile(request) ?: RemoteFeedback.handle(request)?.let(::json)
-                    ?: LanHttpResponse.status(405, "Method Not Allowed")
             path == "api/logs" || path.startsWith("api/logs/") ->
                 RemoteLogs.handle(request) ?: LanHttpResponse.status(405, "Method Not Allowed")
             // 「设置 → 维护」里的性能诊断 (体检 / 录制 / 报告), 见 RemotePerfDiagnostics

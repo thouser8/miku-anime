@@ -181,8 +181,7 @@ internal data class TvLogShare(val state: LogLanShareState?)
 
 /**
  * 账号, 从上到下: 用户 (切换用户、改成本地 / Bangumi 用户这些, 放最前面免得被下面的长列表挤到看不到) →
- * Bangumi 登录 (没登录或登录失效时是登录入口: 扫码登录、在电视上登录; 登录着是你是谁、退出登录) → 我的反馈 (主页点头像就到这一页,
- * 见 feedbackItems) → 注册与登录的常见问题 (没登录时, 在最下面). 多用户的增删改在选人页与手机控制台里.
+ * Bangumi 登录 (没登录或登录失效时是登录入口: 扫码登录、在电视上登录; 登录着是你是谁、退出登录) → 注册与登录的常见问题 (没登录时, 在最下面). 多用户的增删改在选人页与手机控制台里.
  */
 internal fun TvSettingsItemsBuilder.accountItems() {
     val account = TvAppSettingKeys.account
@@ -257,8 +256,7 @@ internal fun TvSettingsItemsBuilder.accountItems() {
         visible = { !it.isLocal() && it[account]?.selfInfo?.isSessionValid == true },
     ) { env -> env.show(TvSettingsOverlay.Dialog { dismiss -> TvLogoutDialog(env.deps.profile, dismiss) }) }
 
-    // ---- 反馈, 登录的常见问题 (最下面) ----
-    feedbackItems(showHeader = { true })
+    // ---- 登录的常见问题 (最下面) ----
     loginHelpItems()
 }
 

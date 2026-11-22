@@ -1,0 +1,121 @@
+# Miku 动画个人定制构建: 由 fork 维护者手动触发 (Actions → Miku Build → Run workflow).
+# 构建 TV release APK (defaultTv 变体), 用仓库变量 SIGNING_KEYSTORE_BASE64 里的签名证书签名,
+# 构建期下载苹方字体注入 res/font. 产物上传为 workflow artifact, 填了 tag 时同时发 Release 供应用内更新.
+name: 'Miku Build'
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '发布 tag (如 v1.0.8-miku, 留空则只出 artifact 不发 Release)'
+        required: false
+        default: ''
+permissions:
+  contents: 'write'
+jobs:
+  build:
+    name: 'Android TV Release (Ubuntu 24.04)'
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 240
+    steps:
+      - name: 'Checkout'
+        uses: 'actions/checkout@v4'
+        with:
+          submodules: 'recursive'
+      - name: 'Free space for Ubuntu'
+        uses: 'jlumbroso/free-disk-space@v1.3.1'
+        with:
+          android: 'false'
+          large-packages: 'false'
+          tool-cache: 'false'
+      - name: 'Enable Swap'
+        run: |-
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+      - name: 'Write local.properties'
+        run: |-
+          rm -f local.properties
+          echo "ani.android.abis=all" >> local.properties
+          echo "ani.dandanplay.app.id=${{ secrets.DANDANPLAY_APP_ID }}" >> local.properties
+          echo "ani.dandanplay.app.secret=${{ secrets.DANDANPLAY_APP_SECRET }}" >> local.properties
+          echo "ani.tmdb.api.token=${{ secrets.TMDB_API_TOKEN }}" >> local.properties
+          echo "kotlin.native.ignoreDisabledTargets=true" >> local.properties
+          echo "ani.enable.firebase=false" >> local.properties
+          echo "jvm.toolchain.version=21" >> local.properties
+      - name: 'Mock google-services.json'
+        run: |
+          echo '{"project_info":{"project_number":"0","project_id":"mock-project","storage_bucket":"mock-bucket"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000000","android_client_info":{"package_name":"io.github.grahamzen.anime"}},"api_key":[{"current_key":"mock_key"}]},{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000001","android_client_info":{"package_name":"io.github.grahamzen.anime.tv"}},"api_key":[{"current_key":"mock_key"}]}]}' > ./app/android/google-services.json
+      - name: 'Download PingFang fonts into res/font'
+        run: |
+          set -euo pipefail
+          FDIR="app/shared/ui-foundation/src/androidMain/res/font"
+          mkdir -p "$FDIR"
+          URL_BASE="https://raw.githubusercontent.com/refinec/PingFangSC/main/ttf"
+          curl -fsSL --retry 3 "$URL_BASE/PingFangSC-Regular.ttf" -o "$FDIR/app_font.ttf"
+          curl -fsSL --retry 3 "$URL_BASE/PingFangSC-Semibold.ttf" -o "$FDIR/app_font_semibold.ttf"
+          [ "$(stat -c%s "$FDIR/app_font.ttf")" -gt 5000000 ] || { echo "app_font.ttf too small"; exit 1; }
+          [ "$(stat -c%s "$FDIR/app_font_semibold.ttf")" -gt 5000000 ] || { echo "app_font_semibold.ttf too small"; exit 1; }
+          ls -la "$FDIR"
+      - name: 'Setup Android SDK'
+        uses: 'android-actions/setup-android@v3'
+        with:
+          accept-android-sdk-licenses: 'true'
+          packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
+      - name: 'Get JBR (Linux)'
+        id: 'jbr'
+        env:
+          RUNNER_TOOL_CACHE: '${{ runner.tool_cache }}'
+          JBR_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz'
+          JBR_CHECKSUM_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz.checksum'
+        shell: 'bash'
+        run: 'python .github/workflows/download_jbr.py'
+      - name: 'Setup JBR 21'
+        uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+        with:
+          java-version: '21'
+          distribution: 'jdkfile'
+          jdkFile: '${{ steps.jbr.outputs.jbrLocation }}'
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+      - name: 'Prepare signing key'
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ vars.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > android_signing_key
+          [ "$(stat -c%s android_signing_key)" -gt 1000 ] || { echo "keystore missing"; exit 1; }
+      - name: 'Setup Gradle'
+        uses: 'gradle/actions/setup-gradle@v3'
+        with:
+          cache-disabled: 'true'
+      - name: 'Build Android TV Release APKs'
+        env:
+          signing_release_storeFileFromRoot: 'android_signing_key'
+          signing_release_storePassword: 'miku-tv-signing-2026'
+          signing_release_keyAlias: 'miku'
+          signing_release_keyPassword: 'miku-tv-signing-2026'
+        timeout-minutes: 180
+        run: './gradlew assembleDefaultTvRelease "--stacktrace" "-Porg.gradle.daemon.idletimeout=60000" "-Dfile.encoding=UTF-8" "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" "-Dkotlin.daemon.jvm.options=-Xmx6g"'
+      - name: 'Upload APK artifacts'
+        uses: 'actions/upload-artifact@v4'
+        with:
+          name: 'miku-tv-apks'
+          path: 'app/android/build/outputs/apk/defaultTv/release/android-default-tv-*-release.apk'
+          overwrite: 'true'
+      - name: 'Create Release and upload APKs'
+        if: ${{ inputs.tag != '' }}
+        env:
+          GH_TOKEN: '${{ github.token }}'
+        run: |
+          set -euo pipefail
+          tag='${{ inputs.tag }}'
+          version="${tag#v}"
+          out='app/android/build/outputs/apk/defaultTv/release'
+          mkdir -p rel
+          for abi in arm64-v8a armeabi-v7a x86_64 universal; do
+            cp "$out/android-default-tv-$abi-release.apk" "rel/miku-$version-$abi.apk"
+          done
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            gh release create "$tag" --title "$version" --notes "Miku 动画个人定制构建"
+          fi
+          gh release upload "$tag" rel/*.apk --clobber
+          echo "Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$tag"
