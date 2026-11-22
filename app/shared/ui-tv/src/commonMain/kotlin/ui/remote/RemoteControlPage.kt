@@ -118,7 +118,7 @@ internal fun renderRemoteControlPage(
     <button type="button" class="set-nav-row" data-group="device"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 1.01 7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg><span class="set-nav-txt"><b>这台手机</b><small>主题、音量控件、从手机打开 Izuko、后台保持连接</small><small class="set-nav-note" hidden></small></span><span class="set-nav-go">›</span></button>
     </div>
     <div class="card set-nav">
-    """
+    """.trimIndent() + """
     <button type="button" class="set-nav-row" data-group="maintain"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg><span class="set-nav-txt"><b>维护</b><small>应用更新、日志、性能诊断、设置备份、换电视</small><small class="set-nav-note" hidden></small></span><span class="set-nav-go">›</span></button>
     """.trimIndent() + "\n" + (if (debugTools) SET_DEBUG_ROW + "\n" else "") + """
     </div>
@@ -149,7 +149,7 @@ internal fun renderRemoteControlPage(
     <div id="set-front"></div>
     <div id="set-keep"></div>
     </div>
-    """
+    """.trimIndent() + """
     <div class="set-group" data-group="maintain" hidden>
     <h2 class="set-group-h">维护</h2>
     <div id="set-update"></div>
