@@ -201,6 +201,18 @@ jobs:
           printf '%s' "${{ vars.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > src/android_signing_key
           [ "$(stat -c%s src/android_signing_key)" -gt 1000 ] || { echo "签名证书为空"; exit 1; }
 
+      - name: '缓存 Gradle 依赖'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        uses: 'actions/cache@v4'
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: "gradle-${{ runner.os }}-${{ hashFiles('src/gradle/libs.versions.toml', 'src/gradle/wrapper/gradle-wrapper.properties', 'src/gradle.properties') }}"
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: '构建 TV Release APK'
         if: ${{ steps.dup.outputs.skip != '1' }}
         working-directory: 'src'
@@ -210,12 +222,44 @@ jobs:
           signing_release_keyAlias: 'miku'
           signing_release_keyPassword: 'miku-tv-signing-2026'
         run: |
-          ./gradlew assembleDefaultTvRelease \
-            "--stacktrace" \
-            "-Porg.gradle.daemon.idletimeout=60000" \
-            "-Dfile.encoding=UTF-8" \
-            "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" \
-            "-Dkotlin.daemon.jvm.options=-Xmx6g"
+          set -uo pipefail
+          LOG="$RUNNER_TEMP/gradle-build.log"
+
+          # Maven Central 对同 IP 的高频请求会返回 429。
+          # 让 Gradle 自己做指数退避重试, 而不是一次 429 就整体失败。
+          {
+            echo 'systemProp.org.gradle.internal.repository.max.retries=6'
+            echo 'systemProp.org.gradle.internal.repository.initial.backoff=2000'
+          } >> gradle.properties
+
+          run_build() {
+            ./gradlew assembleDefaultTvRelease \
+              "--stacktrace" \
+              "-Porg.gradle.daemon.idletimeout=60000" \
+              "-Dfile.encoding=UTF-8" \
+              "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" \
+              "-Dkotlin.daemon.jvm.options=-Xmx6g" 2>&1 | tee "$LOG"
+          }
+
+          for attempt in 1 2 3; do
+            echo "===== Gradle 构建 第 $attempt 次 ====="
+            if run_build; then
+              echo "构建成功"
+              exit 0
+            fi
+            # 只有依赖下载类故障值得重试; 真正的编译错误重试没有意义
+            if grep -qE 'status code 429|Too Many Requests|Could not resolve|Could not GET|Connection reset|Read timed out|Connect timed out|Connection timed out' "$LOG"; then
+              if [ "$attempt" -lt 3 ]; then
+                WAIT=$(( attempt * 120 ))
+                echo "::warning::依赖下载被限流或网络抖动, ${WAIT} 秒后重试"
+                ./gradlew --stop >/dev/null 2>&1 || true
+                sleep "$WAIT"
+                continue
+              fi
+            fi
+            echo "::error::构建失败 (非可重试的网络问题)"
+            exit 1
+          done
 
       - name: '暂存产物'
         if: ${{ steps.dup.outputs.skip != '1' }}
