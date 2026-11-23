@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从上游仓库找出"版本号最大"的正式/预发布版本 tag。
+从上游仓库找出"最近发布"的版本 tag (alpha / beta / 正式版都算)。
 
-上游 release 里混着 test-diag59 / test-msrebuild1 / notices 这类非版本 tag,
-也有正文说明用的 release, 所以必须按语义化版本过滤 + 排序, 不能直接取"最新发布"。
-
-输出到 stdout: tag 名 (如 v1.0.9-alpha05), 没有可用版本时输出空并 exit 1。
+两个坑:
+  1. 上游 release 里混着 test-diag59 / test-msrebuild1 / notices 这类非版本 tag, 必须按语义化版本过滤。
+  2. 上游仓库继承了 Animeko 的历史 6.x tag (2026 年 7-9 月), 那是旧产品线,
+     所以不能按"版本号最大"取 —— 必须按发布时间取最新的语义化 tag。
 """
 
 import json
@@ -18,19 +18,7 @@ import urllib.request
 UPSTREAM = os.environ.get("UPSTREAM_REPO", "GrahamZen/izuko-tv")
 TOKEN = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
-SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z]+)\.?(\d+))?$")
-STAGE = {"alpha": 0, "beta": 1, "rc": 2}
-
-
-def sort_key(tag: str):
-    m = SEMVER.match(tag)
-    if not m:
-        return None
-    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    pre, num = m.group(4), int(m.group(5) or 0)
-    # 正式版排在预发布之后: (major, minor, patch, stage, prenum)
-    stage = 3 if pre is None else STAGE.get(pre.lower(), 0)
-    return (major, minor, patch, stage, num)
+SEMVER = re.compile(r"^v?\d+\.\d+\.\d+(?:-[A-Za-z]+\.?\d*)?$")
 
 
 def fetch(url: str):
@@ -47,7 +35,7 @@ def fetch(url: str):
 
 
 def main():
-    best = None
+    cands = []
     page = 1
     while page <= 3:
         try:
@@ -63,19 +51,18 @@ def main():
             if r.get("draft"):
                 continue
             tag = r.get("tag_name", "")
-            k = sort_key(tag)
-            if k is None:
+            if not SEMVER.match(tag):
                 continue
-            if best is None or k > best[0]:
-                best = (k, tag, r.get("prerelease", False))
+            cands.append((r.get("published_at") or "", tag, r.get("prerelease", False)))
         page += 1
 
-    if best is None:
+    if not cands:
         print("上游没有符合语义化版本的 release", file=sys.stderr)
         return 1
 
-    _, tag, pre = best
-    # 第一行给 shell 用, 第二行给 workflow 判断是否预发布
+    # published_at 是 ISO8601, 字典序即时间序
+    cands.sort(key=lambda x: x[0], reverse=True)
+    _, tag, pre = cands[0]
     print(tag)
     print("prerelease" if pre else "stable")
     return 0
