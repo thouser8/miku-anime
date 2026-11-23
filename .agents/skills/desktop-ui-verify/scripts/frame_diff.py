@@ -1,1 +1,0 @@
-../../android-ui-verify/scripts/frame_diff.py

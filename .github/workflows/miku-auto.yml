@@ -1,0 +1,266 @@
+# Miku 动画自动构建
+#
+# 流程: 找到上游 (GrahamZen/izuko-tv) 版本号最大的 release tag (alpha/beta/正式版都算)
+#   -> 浅克隆该 tag 的源码 -> 重放 miku-assets + tools/miku-customize.py 的全部定制
+#   -> 云端签名构建 TV release -> 发到本仓库 Release (应用内更新直接从这里拉)
+#
+# 触发:
+#   schedule       每 6 小时自动查一次, 有新版本就构建
+#   push (main)    改了定制脚本 / 图标 / 本工作流时立即重建
+#   workflow_dispatch  手动跑, 可指定 tag 或强制重建
+name: 'Miku 自动构建'
+
+on:
+  schedule:
+    - cron: '0 2,8,14,20 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: '指定上游 tag (如 v1.0.9-alpha05), 留空自动取最新'
+        required: false
+        default: ''
+      force:
+        description: '强制重建 (已存在同 tag 的 Release 时也重跑)'
+        type: 'boolean'
+        default: false
+  push:
+    branches: ['main']
+    paths:
+      - 'tools/**'
+      - 'miku-assets/**'
+      - '.github/workflows/miku-auto.yml'
+
+permissions:
+  contents: 'write'
+
+concurrency:
+  group: 'miku-auto'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 'TV Release'
+    runs-on: 'ubuntu-24.04'
+    timeout-minutes: 300
+    env:
+      FORCE: ${{ (github.event_name == 'push' || inputs.force) && '1' || '0' }}
+      REQUESTED_TAG: ${{ inputs.upstream_tag }}
+    steps:
+      - name: 'Checkout 定制仓库'
+        uses: 'actions/checkout@v4'
+
+      - name: '解析目标版本'
+        id: 'ver'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+          UPSTREAM_REPO: 'GrahamZen/izuko-tv'
+        run: |
+          set -euo pipefail
+          if [ -n "${REQUESTED_TAG:-}" ]; then
+            TAG="$REQUESTED_TAG"
+            echo "使用手动指定 tag: $TAG"
+            PRE=0
+            case "$TAG" in *alpha*|*beta*|*rc*) PRE=1 ;; esac
+          else
+            OUT=$(python3 tools/latest-upstream.py)
+            TAG=$(echo "$OUT" | sed -n '1p')
+            KIND=$(echo "$OUT" | sed -n '2p')
+            PRE=0; [ "$KIND" = "prerelease" ] && PRE=1
+            echo "上游最新版本: $TAG ($KIND)"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Miku 动画构建"
+            echo ""
+            echo "- 上游版本: \`$TAG\`"
+            echo "- 输出版本: \`$VERSION\`"
+            echo "- 预发布: $([ "$PRE" = "1" ] && echo yes || echo no)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: '检查是否已构建'
+        id: 'dup'
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.ver.outputs.tag }}'
+          if [ "$FORCE" != "1" ] && gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG 已存在, 跳过。要重建请手动触发并勾选 force。"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: '克隆上游源码'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            --branch '${{ steps.ver.outputs.tag }}' \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/GrahamZen/izuko-tv.git src
+          echo "源码 HEAD: $(git -C src rev-parse --short HEAD)"
+
+      - name: '重放定制'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          python3 tools/miku-customize.py src --version '${{ steps.ver.outputs.version }}' --repo 'thouser8/miku-anime'
+
+      - name: '注入苹方字体'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          FDIR="src/app/shared/ui-foundation/src/androidMain/res/font"
+          mkdir -p "$FDIR"
+          BASE="https://raw.githubusercontent.com/refinec/PingFangSC/main/ttf"
+          curl -fsSL --retry 3 "$BASE/PingFangSC-Regular.ttf"  -o "$FDIR/app_font.ttf"
+          curl -fsSL --retry 3 "$BASE/PingFangSC-Semibold.ttf" -o "$FDIR/app_font_semibold.ttf"
+          for f in app_font.ttf app_font_semibold.ttf; do
+            sz=$(stat -c%s "$FDIR/$f")
+            echo "$f: $sz bytes"
+            [ "$sz" -gt 5000000 ] || { echo "字体文件异常 ($f)"; exit 1; }
+          done
+
+      - name: '写入构建配置'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          cd src
+          rm -f local.properties
+          {
+            echo "ani.android.abis=all"
+            echo "ani.dandanplay.app.id=${{ secrets.DANDANPLAY_APP_ID }}"
+            echo "ani.dandanplay.app.secret=${{ secrets.DANDANPLAY_APP_SECRET }}"
+            echo "ani.tmdb.api.token=${{ secrets.TMDB_API_TOKEN }}"
+            echo "kotlin.native.ignoreDisabledTargets=true"
+            echo "ani.enable.firebase=false"
+            echo "jvm.toolchain.version=21"
+          } >> local.properties
+          echo '{"project_info":{"project_number":"0","project_id":"mock-project","storage_bucket":"mock-bucket"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000000","android_client_info":{"package_name":"io.github.grahamzen.anime"}},"api_key":[{"current_key":"mock_key"}]},{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000001","android_client_info":{"package_name":"io.github.grahamzen.anime.tv"}},"api_key":[{"current_key":"mock_key"}]}]}' > app/android/google-services.json
+
+      - name: '扩展磁盘与交换'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          sudo fallocate -l 10G /swapfile || true
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: '安装 Android SDK'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        uses: 'android-actions/setup-android@v3'
+        with:
+          accept-android-sdk-licenses: 'true'
+          packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
+
+      - name: '准备 JBR 21'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        id: 'jbr'
+        env:
+          RUNNER_TOOL_CACHE: '${{ runner.tool_cache }}'
+          JBR_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz'
+          JBR_CHECKSUM_URL: 'https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk_jcef-21.0.5-linux-x64-b750.29.tar.gz.checksum'
+        working-directory: 'src'
+        run: 'python .github/workflows/download_jbr.py'
+
+      - name: '启用 Java 21'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        uses: 'gmitch215/setup-java@6d2c5e1f82f180ae79f799f0ed6e3e5efb4e664d'
+        with:
+          java-version: '21'
+          distribution: 'jdkfile'
+          jdkFile: '${{ steps.jbr.outputs.jbrLocation }}'
+        env:
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+
+      - name: '还原签名证书'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${{ vars.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > src/android_signing_key
+          [ "$(stat -c%s src/android_signing_key)" -gt 1000 ] || { echo "签名证书为空"; exit 1; }
+
+      - name: '构建 TV Release APK'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        working-directory: 'src'
+        env:
+          signing_release_storeFileFromRoot: 'android_signing_key'
+          signing_release_storePassword: 'miku-tv-signing-2026'
+          signing_release_keyAlias: 'miku'
+          signing_release_keyPassword: 'miku-tv-signing-2026'
+        run: |
+          ./gradlew assembleDefaultTvRelease \
+            "--stacktrace" \
+            "-Porg.gradle.daemon.idletimeout=60000" \
+            "-Dfile.encoding=UTF-8" \
+            "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" \
+            "-Dkotlin.daemon.jvm.options=-Xmx6g"
+
+      - name: '暂存产物'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        run: |
+          set -euo pipefail
+          VERSION='${{ steps.ver.outputs.version }}'
+          OUT='src/app/android/build/outputs/apk/defaultTv/release'
+          mkdir -p rel
+          ls -la "$OUT"
+          for abi in arm64-v8a armeabi-v7a x86_64 universal; do
+            src="$OUT/android-default-tv-$abi-release.apk"
+            [ -f "$src" ] || { echo "缺少产物: $src"; exit 1; }
+            cp "$src" "rel/miku-$VERSION-$abi.apk"
+          done
+          # AGPLv3 要求随二进制提供对应源码: 打包定制后的源码(去掉 .git / 构建产物 / boost 子模块)
+          tar czf "rel/miku-$VERSION-source.tar.gz" \
+            --exclude='.git' \
+            --exclude='build' \
+            --exclude='*/build' \
+            --exclude='android_signing_key' \
+            --exclude='local.properties' \
+            --exclude='src/torrent/anitorrent/anitorrent-native/libs/boost' \
+            -C src .
+          ls -la rel/
+
+      - name: '上传构建产物'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        uses: 'actions/upload-artifact@v4'
+        with:
+          name: 'miku-${{ steps.ver.outputs.version }}'
+          path: 'rel/*'
+          overwrite: 'true'
+          retention-days: 30
+
+      - name: '发布 Release'
+        if: ${{ steps.dup.outputs.skip != '1' }}
+        env:
+          GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.ver.outputs.tag }}'
+          VERSION='${{ steps.ver.outputs.version }}'
+          PRE='${{ steps.ver.outputs.prerelease }}'
+          NOTES="Miku动画 $VERSION
+
+基于 [Izuko TV](https://github.com/GrahamZen/izuko-tv) 的个人定制构建:
+
+- 应用名 Miku动画, 初音未来图标与 TV 横幅
+- 内置苹方 (PingFang SC) 字体
+- 移除工单反馈系统
+- 更新镜像使用国内可达的 GitHub 加速站
+
+安装包按 ABI 命名, 不确定架构就下 \`universal\`。
+本构建使用自签名证书, 与上游 Izuko TV 签名不同, 从上游切换过来必须先卸载。
+
+源码: \`miku-$VERSION-source.tar.gz\` (AGPLv3), 由 https://github.com/thouser8/miku-anime 的 CI 自动生成。"
+          ARGS=()
+          if [ "$PRE" = "1" ]; then ARGS+=(--prerelease); fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" --title "Miku动画 $VERSION" --notes "$NOTES" "${ARGS[@]}"
+          fi
+          gh release upload "$TAG" rel/* --clobber
+          echo "Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

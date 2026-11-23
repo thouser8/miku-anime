@@ -1,46 +1,19 @@
-.gradle
+# 构建产物
+*.apk
+*.aab
+*.tar.gz
 build/
-!gradle/wrapper/gradle-wrapper.jar
-!**/src/main/**/build/
-!**/src/test/**/build/
+.gradle/
+
+# 本地配置与密钥
 local.properties
-.kotlin/
-**/test-sandbox/
-**/*.podspec
-/venv/
-/*.patch
-bin/
-Podfile.lock
+android_signing_key
+*.p12
+*.pfx
+*.keystore
+*.jks
 
-# Local source files
-**/local.kt
-
-# Android build outputs
-app/android/release
-app/android/debug
-
-### IntelliJ IDEA ###
+# 编辑器
 .idea/
-*.iws
-*.iml
-*.ipr
-out/
-!**/src/main/**/out/
-!**/src/test/**/out/
-.run/Preview*.xml
-
-### VS Code ###
 .vscode/
-
-### Mac OS ###
 .DS_Store
-
-.env
-kls_database.db
-/torrent/anitorrent/*.dylib
-/torrent/anitorrent/*.dll
-/torrent/anitorrent/*.so
-/app/ios/Animeko/GoogleService-Info.plist
-/app/ios/12.4.0
-/app/ios/xcb2.log
-/app/ios/xcodebuild.log

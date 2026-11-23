@@ -1,1 +1,0 @@
-This module is only for packaging. Desktop code is placed in ~/common/src/desktopMain
