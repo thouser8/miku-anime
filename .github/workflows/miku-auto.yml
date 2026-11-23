@@ -235,11 +235,26 @@ jobs:
           run_build() {
             ./gradlew assembleDefaultTvRelease \
               "--stacktrace" \
+              "--max-workers=2" \
               "-Porg.gradle.daemon.idletimeout=60000" \
               "-Dfile.encoding=UTF-8" \
-              "-Dorg.gradle.jvmargs=-Xmx8g -Dkotlin.daemon.jvm.options=-Xmx6g" \
-              "-Dkotlin.daemon.jvm.options=-Xmx6g" 2>&1 | tee "$LOG"
+              "-Dorg.gradle.jvmargs=-Xmx7g -XX:MaxMetaspaceSize=1g" \
+              "-Dkotlin.daemon.jvm.options=-Xmx4g" \
+              -x lintVitalAnalyzeDefaultTvRelease \
+              -x lintVitalReportDefaultTvRelease \
+              -x lintVitalDefaultTvRelease 2>&1 | tee "$LOG"
           }
+
+          # ===== 内存预算说明 =====
+          # GitHub 标准 runner: 4 vCPU / 16G 内存。
+          # 上游默认 -Xmx8g + kotlin daemon -Xmx6g = 14G, 到 R8 压缩阶段再叠加
+          # 就会打穿物理内存, 内核 OOM killer 杀掉进程 -> 表现为 exit code 143。
+          # 这里改为 7G + 4G, 留 4G 给系统, 另有 10G swap 兜底。
+          # lintVital 在 R8 前后额外吃内存, 对构建产物没有影响, 直接跳过。
+          echo "===== 构建前内存 ====="
+          free -h
+          echo "===== 构建前磁盘 ====="
+          df -h /
 
           for attempt in 1 2 3; do
             echo "===== Gradle 构建 第 $attempt 次 ====="
@@ -247,7 +262,13 @@ jobs:
               echo "构建成功"
               exit 0
             fi
-            # 只有依赖下载类故障值得重试; 真正的编译错误重试没有意义
+            echo "===== 构建失败, 采集现场 ====="
+            free -h
+            echo "--- 内核 OOM 记录 ---"
+            sudo dmesg -T 2>/dev/null | grep -iE 'out of memory|killed process|oom-kill' | tail -15 || echo '(无 OOM 记录)'
+            echo "--- 磁盘 ---"
+            df -h /
+            # 只有依赖下载类故障值得重试; 编译错误和 OOM 重试没有意义
             if grep -qE 'status code 429|Too Many Requests|Could not resolve|Could not GET|Connection reset|Read timed out|Connect timed out|Connection timed out' "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
                 WAIT=$(( attempt * 120 ))
