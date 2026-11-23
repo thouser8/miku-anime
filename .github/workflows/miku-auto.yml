@@ -49,6 +49,13 @@ jobs:
       - name: 'Checkout 定制仓库'
         uses: 'actions/checkout@v4'
 
+      - name: '清理磁盘空间'
+        uses: 'jlumbroso/free-disk-space@v1.3.1'
+        with:
+          android: 'false'
+          large-packages: 'false'
+          tool-cache: 'false'
+
       - name: '解析目标版本'
         id: 'ver'
         env:
@@ -142,13 +149,23 @@ jobs:
           } >> local.properties
           echo '{"project_info":{"project_number":"0","project_id":"mock-project","storage_bucket":"mock-bucket"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000000","android_client_info":{"package_name":"io.github.grahamzen.anime"}},"api_key":[{"current_key":"mock_key"}]},{"client_info":{"mobilesdk_app_id":"1:123456789012:android:0000000000000001","android_client_info":{"package_name":"io.github.grahamzen.anime.tv"}},"api_key":[{"current_key":"mock_key"}]}]}' > app/android/google-services.json
 
-      - name: '扩展磁盘与交换'
+      - name: '扩展交换空间'
         if: ${{ steps.dup.outputs.skip != '1' }}
         run: |
-          sudo fallocate -l 10G /swapfile || true
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # runner 镜像状态不固定, 已有 swap 或 fallocate 失败都不该中断构建
+          set +e
+          if swapon --show | grep -q .; then
+            echo "已有交换空间:"; swapon --show
+          elif [ -f /swapfile ]; then
+            echo "/swapfile 已存在, 尝试启用"; sudo swapon /swapfile 2>/dev/null || true
+          else
+            sudo fallocate -l 10G /swapfile \
+              && sudo chmod 600 /swapfile \
+              && sudo mkswap /swapfile \
+              && sudo swapon /swapfile
+          fi
+          free -h
+          exit 0
 
       - name: '安装 Android SDK'
         if: ${{ steps.dup.outputs.skip != '1' }}
